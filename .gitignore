@@ -1,0 +1,25 @@
+# Dependencies (no committed lockfile — CI installs with --no-frozen-lockfile)
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+
+# Build output (tsc outDir)
+dist/
+
+# Test output
+coverage/
+
+# Logs
+*.log
+
+# Env files & secrets
+.env
+.env.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code (local-only)
+.claude/
