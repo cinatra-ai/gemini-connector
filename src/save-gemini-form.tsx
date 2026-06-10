@@ -30,10 +30,16 @@ export function SaveGeminiForm({
         kind: "success",
       });
       router.refresh();
-    } catch (error) {
+    } catch {
+      // Never surface the caught error's message: in a Next.js production
+      // build a thrown Server Action error reaches this catch with its real
+      // message replaced by the framework's generic masking blurb, so piping
+      // `error.message` into the toast shows that paragraph to the user.
+      // Friendly operation-specific copy is unconditional; the real failure
+      // detail stays in the server-side logs (cinatra-ai/cinatra#51 pattern).
       addNotification({
         title: "Gemini save failed",
-        body: error instanceof Error ? error.message : "Unable to save the Gemini connection.",
+        body: "Unable to save the Gemini connection.",
         kind: "error",
       });
     }
