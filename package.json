@@ -4,6 +4,15 @@
   "license": "Apache-2.0",
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./register": "./src/register.ts",
+    "./log-directory": "./src/log-directory.ts",
+    "./settings-page": "./src/settings-page.tsx",
+    "./setup-page": "./src/setup-page.tsx",
+    "./actions": "./src/actions.ts",
+    "./save-gemini-form": "./src/save-gemini-form.tsx"
+  },
   "types": "src/index.ts",
   "scripts": {
     "test": "vitest"
@@ -32,6 +41,11 @@
     "apiVersion": "cinatra.ai/v1",
     "kind": "connector",
     "displayName": "Gemini",
-    "dependencies": []
+    "dependencies": [],
+    "serverEntry": "./register",
+    "requestedHostPorts": [
+      "capabilities"
+    ],
+    "sdkAbiRange": "^2"
   }
 }
