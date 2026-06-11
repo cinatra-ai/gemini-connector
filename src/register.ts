@@ -18,6 +18,12 @@ import type {
   HostNangoConnectionStorageService,
 } from "@cinatra-ai/sdk-extensions";
 import { registerGeminiConnector, type GeminiConnectorDeps } from "./deps";
+import {
+  getConfiguredGeminiAPIKey,
+  getGeminiLoggingSettings,
+  saveGeminiLoggingSettings,
+} from "./index";
+import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
 
 const PACKAGE_NAME = "@cinatra-ai/gemini-connector";
 
@@ -74,4 +80,20 @@ export function register(ctx: ExtensionHostContext): void {
   };
 
   registerGeminiConnector(deps);
+
+  // Lazy/guarded host-access cutover: the host's settings/status
+  // surfaces (campaign actions, telemetry, logging, the MCP llm-access test
+  // route, dev auto-connect) resolve this connector's readers/writers through
+  // the `llm-provider-surface` capability instead of value-importing the
+  // package. Provider absence degrades each host feature per call.
+  ctx.capabilities.registerProvider("llm-provider-surface", {
+    packageName: PACKAGE_NAME,
+    impl: {
+      providerId: "gemini",
+      getConfiguredAPIKey: () => getConfiguredGeminiAPIKey(),
+      getLoggingSettings: () => getGeminiLoggingSettings(),
+      saveLoggingSettings: (enabled: boolean) => saveGeminiLoggingSettings(enabled),
+      logDirectory: GEMINI_API_LOG_DIRECTORY,
+    },
+  });
 }
