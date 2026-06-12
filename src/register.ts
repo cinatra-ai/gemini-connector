@@ -22,6 +22,8 @@ import {
   getConfiguredGeminiAPIKey,
   getGeminiLoggingSettings,
   saveGeminiLoggingSettings,
+  buildGeminiRequestHeaders,
+  writeGeminiLogFile,
 } from "./index";
 import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
 
@@ -94,6 +96,23 @@ export function register(ctx: ExtensionHostContext): void {
       getLoggingSettings: () => getGeminiLoggingSettings(),
       saveLoggingSettings: (enabled: boolean) => saveGeminiLoggingSettings(enabled),
       logDirectory: GEMINI_API_LOG_DIRECTORY,
+      // LLM provider adapter cutover (cinatra#151 Stage 2): the host's
+      // packages/llm Gemini adapter resolves these at call time instead of
+      // value-importing the package. `buildRequestHeaders` carries the
+      // host self-client headers (via the deps bound above); `writeLogFile`
+      // keeps the connector's logging-enabled check + redaction.
+      buildRequestHeaders: (input: {
+        apiKey?: string;
+        contentType?: string;
+        extraHeaders?: Record<string, string>;
+      }) =>
+        buildGeminiRequestHeaders({
+          apiKey: input?.apiKey,
+          contentType: input?.contentType,
+          extraHeaders: input?.extraHeaders,
+        }),
+      writeLogFile: (input: { label: string; kind: "request" | "response"; body: unknown }) =>
+        writeGeminiLogFile({ label: input.label, kind: input.kind, body: input.body }),
     },
   });
 }
