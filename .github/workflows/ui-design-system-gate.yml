@@ -10,8 +10,10 @@ name: ui-design-system-gate
 # The preset is this repo's ENTIRE lint surface (no pre-existing ESLint
 # debt to filter around, unlike the cinatra monorepo caller), so the gate
 # runs plain ESLint and gates on its exit code: any boundary error or
-# fatal parse failure fails; warn-level raw-JSX findings are printed
-# without failing until ramped to error. --no-inline-config keeps the
+# fatal parse failure fails; the raw-JSX block (Block B) is ramped to
+# error here (eng#68), so raw-JSX findings now fail the gate too. This
+# repo was verified at 0 raw-JSX findings before the ramp.
+# --no-inline-config keeps the
 # "exemptions are files-glob carve-outs, never inline eslint-disable"
 # contract enforceable.
 
@@ -28,5 +30,5 @@ jobs:
     uses: cinatra-ai/ci/.github/workflows/ui-design-system-gate.yml@ee01071f703412c4aa6e6b2fb16b089cb8bbeac0 # v0.1.0
     with:
       ui_globs: "**/components/ui/**,**/src/ui/**"
-      strictness: warn
+      strictness: error
       lint_command: npx eslint . --no-inline-config
