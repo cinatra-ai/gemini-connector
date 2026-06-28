@@ -1,6 +1,6 @@
 /**
- * SaveGeminiForm error-notification contract (cinatra-ai/cinatra-engineering#67;
- * pattern from the host fix cinatra-ai/cinatra#51).
+ * SaveGeminiForm error-notification contract
+ * (pattern from the host fix cinatra-ai/cinatra#51).
  *
  * In a Next.js production build, a Server Action that throws has its real
  * `Error.message` replaced by the framework's generic masking blurb before it
