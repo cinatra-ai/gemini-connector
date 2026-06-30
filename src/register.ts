@@ -19,15 +19,29 @@ import type {
   HostMcpSelfClientService,
   NangoSystemSurface,
 } from "@cinatra-ai/sdk-extensions";
-import { registerGeminiConnector, type GeminiConnectorDeps } from "./deps";
+import {
+  registerGeminiConnector,
+  getGeminiDeps,
+  type GeminiConnectorDeps,
+} from "./deps";
 import {
   getConfiguredGeminiAPIKey,
   getGeminiLoggingSettings,
   saveGeminiLoggingSettings,
   buildGeminiRequestHeaders,
   writeGeminiLogFile,
+  saveGeminiAPISettings,
+  clearGeminiAPISettings,
+  getGeminiAPIStatus,
 } from "./index";
 import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
+
+/** The host-published action-guard service (value, NOT the SDK
+ *  `requireExtensionAction` import — a runtime serverEntry graph rejects SDK
+ *  value imports). Mirrors openai-connector / anthropic-connector. */
+type HostActionGuard = {
+  require: (packageId: string, mode: "read" | "manage") => Promise<void>;
+};
 
 const PACKAGE_NAME = "@cinatra-ai/gemini-connector";
 
@@ -129,6 +143,82 @@ export function register(ctx: ExtensionHostContext): void {
         }),
       writeLogFile: (input: { label: string; kind: "request" | "response"; body: unknown }) =>
         writeGeminiLogFile({ label: input.label, kind: input.kind, body: input.body }),
+    },
+  });
+
+  // ---- schema-config named actions (cinatra#782) ----
+  //
+  // The declarative setup surface (cinatra.configSchema) renders WITHOUT
+  // shipping React. Its probe + named-action fields reference these
+  // host-registered actions BY ID; the host dispatches them through
+  // `/api/extensions/{installId}/actions/{actionId}`, authorizing the actor at
+  // the "use" tier. Saving/clearing a credential is a MANAGE-tier mutation (the
+  // prior saveGeminiConnectionAction gated "manage"), so the WRITE handlers
+  // re-assert the manage gate via the host action-guard service. Requires the
+  // "ui" host port.
+
+  // Resolve the host action-guard service LAZILY at action-call time as a VALUE
+  // through the capability registry (NEVER an SDK value import — a runtime
+  // serverEntry graph rejects those). A missing guard FAILS CLOSED.
+  const requireManage = async (): Promise<void> => {
+    const provider = ctx.capabilities.resolveProviders(
+      "@cinatra-ai/host:extension-action-guard",
+    )[0];
+    const guard = provider?.impl as HostActionGuard | undefined;
+    if (!guard || typeof guard.require !== "function") {
+      throw new Error(
+        `${PACKAGE_NAME}: host action-guard service is not registered — refusing the ungated action.`,
+      );
+    }
+    await guard.require(PACKAGE_NAME, "manage");
+  };
+
+  // READ/PROBE: connection (Nango) service readiness — drives the advisory copy.
+  ctx.ui.registerAction({
+    id: "connectionServiceReady",
+    handler: async (): Promise<{ ready: boolean }> => ({
+      ready: getGeminiDeps().nango.isConfigured(),
+    }),
+  });
+
+  // PROBE: connection status. THROWS when not connected so the status-probe pill
+  // renders "error"; a connected status returns its detail.
+  ctx.ui.registerAction({
+    id: "connectionStatus",
+    handler: async (): Promise<{ detail: string }> => {
+      const status = getGeminiAPIStatus();
+      if (status.status !== "connected") {
+        throw new Error(status.detail);
+      }
+      return { detail: status.detail };
+    },
+  });
+
+  // WRITE (manage-gated): persist the API key (synced to Nango). The
+  // schema-config form posts the flat secret input as JSON; a blank apiKey is
+  // ABSENT (saveGeminiAPISettings no-ops on a blank re-submit when a saved
+  // pointer exists, and throws when none exists — which the form surfaces as the
+  // error banner).
+  ctx.ui.registerAction({
+    id: "saveConnection",
+    handler: async (input: unknown): Promise<{ banner: string }> => {
+      await requireManage();
+      const fields =
+        input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+      const apiKey = typeof fields.apiKey === "string" ? fields.apiKey : "";
+      await saveGeminiAPISettings({ apiKey });
+      return { banner: "saved" };
+    },
+  });
+
+  // WRITE (manage-gated): clear the stored connection (scrubs the Nango
+  // credential + cinatra-side pointer rows).
+  ctx.ui.registerAction({
+    id: "clearConnection",
+    handler: async (): Promise<{ banner: string }> => {
+      await requireManage();
+      await clearGeminiAPISettings();
+      return { banner: "cleared" };
     },
   });
 }

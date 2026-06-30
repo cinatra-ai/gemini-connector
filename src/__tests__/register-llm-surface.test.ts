@@ -33,6 +33,15 @@ function activate(): RegisteredProvider {
       },
       resolveProviders: () => [],
     },
+    // register(ctx) now ALSO registers the schema-config named actions via
+    // `ctx.ui` (the "ui" host port) — provide a faithful ui port so this
+    // llm-surface test exercises a complete ctx. (Named-action behavior is
+    // asserted in register-ui-actions.test.ts.)
+    ui: {
+      registerSetupSurface: () => {},
+      registerSettingsSurface: () => {},
+      registerAction: () => {},
+    },
   } as never;
   register(ctx);
   expect(registered).toHaveLength(1);
