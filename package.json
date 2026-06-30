@@ -11,11 +11,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./register": "./src/register.ts",
-    "./log-directory": "./src/log-directory.ts",
-    "./settings-page": "./src/settings-page.tsx",
-    "./setup-page": "./src/setup-page.tsx",
-    "./actions": "./src/actions.ts",
-    "./save-gemini-form": "./src/save-gemini-form.tsx"
+    "./log-directory": "./src/log-directory.ts"
   },
   "types": "src/index.ts",
   "scripts": {
@@ -54,8 +50,56 @@
     "dependencies": [],
     "serverEntry": "./register",
     "requestedHostPorts": [
-      "capabilities"
+      "capabilities",
+      "ui"
     ],
-    "sdkAbiRange": "^2"
+    "sdkAbiRange": "^2",
+    "uiSurface": "schema-config",
+    "configSchema": {
+      "title": "Gemini",
+      "description": "Connect a Google Gemini API key so Gemini-powered agents and workflows can run. The key is stored securely via the connection service.",
+      "fields": [
+        {
+          "kind": "banner",
+          "label": "Result",
+          "variants": [
+            { "name": "saved", "tone": "success", "message": "Gemini connection saved." },
+            { "name": "cleared", "tone": "warning", "message": "Gemini connection cleared." },
+            { "name": "error", "tone": "destructive", "message": "Something went wrong." }
+          ]
+        },
+        {
+          "kind": "advisory",
+          "label": "API key storage",
+          "tone": "info",
+          "probeActionId": "connectionServiceReady",
+          "whenReady": "API keys are stored securely via the connection service.",
+          "whenNotReady": "Configure the connection service first so Gemini API requests can authenticate."
+        },
+        {
+          "kind": "status-probe",
+          "label": "Connection",
+          "actionId": "connectionStatus",
+          "description": "Check whether a Gemini API key is configured."
+        },
+        {
+          "kind": "secret",
+          "key": "apiKey",
+          "label": "Gemini API key",
+          "description": "Create a key in Google AI Studio. Write-only — the stored value is never shown again."
+        },
+        {
+          "kind": "named-action",
+          "label": "Save connection",
+          "actionId": "saveConnection"
+        },
+        {
+          "kind": "named-action",
+          "label": "Clear connection",
+          "actionId": "clearConnection",
+          "confirm": "Clear the stored Gemini connection?"
+        }
+      ]
+    }
   }
 }
