@@ -81,6 +81,10 @@ export interface GeminiConnectorDeps {
   writeConnectorConfigToDatabase: (connectorId: string, value: unknown) => void;
   /** Auth headers for the in-app MCP self-client (the `@/lib/mcp-self-client` surface). */
   buildAppMcpSelfClientHeaders: () => Record<string, string>;
+  /** True in the app's development runtime mode (host `@/lib/runtime-mode`).
+   *  Gates the dev-only default-on for request/response body logging: unset
+   *  logging defaults OFF in production, ON in development. */
+  isAppDevelopmentMode: () => boolean;
   /** Nango connection-storage surface (host-bound from the nango-connector extension). */
   nango: GeminiNangoCapability;
 }

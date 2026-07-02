@@ -43,6 +43,11 @@ type HostActionGuard = {
   require: (packageId: string, mode: "read" | "manage") => Promise<void>;
 };
 
+/** Local STRUCTURAL shape of the host runtime-mode service (id
+ *  `@cinatra-ai/host:runtime-mode`) — mirrors openai-connector. Kept SDK-type-
+ *  free so the serverEntry graph carries no host-peer value import. */
+type HostRuntimeModeShape = { isDevelopment(): boolean };
+
 const PACKAGE_NAME = "@cinatra-ai/gemini-connector";
 
 function hostService<T>(ctx: ExtensionHostContext, capability: string): T {
@@ -61,6 +66,8 @@ export function register(ctx: ExtensionHostContext): void {
     hostService<HostConnectorConfigService>(ctx, "@cinatra-ai/host:connector-config");
   const selfClient = () =>
     hostService<HostMcpSelfClientService>(ctx, "@cinatra-ai/host:mcp-self-client");
+  const runtimeMode = () =>
+    hostService<HostRuntimeModeShape>(ctx, "@cinatra-ai/host:runtime-mode");
   // The connector-authored nango-system surface (registered by the nango
   // gateway's own register(ctx) — a systemExtension, required at boot).
   const nango = (): NangoSystemSurface => {
@@ -81,6 +88,9 @@ export function register(ctx: ExtensionHostContext): void {
     writeConnectorConfigToDatabase: (connectorId, value) =>
       config().write(connectorId, value),
     buildAppMcpSelfClientHeaders: () => selfClient().buildHeaders(),
+    // Resolved LAZILY at call time (probe-safe): gates the dev-only default-on
+    // for request/response body logging.
+    isAppDevelopmentMode: () => runtimeMode().isDevelopment(),
     // Members delegate to the nango-system surface at CALL time (key maps are
     // getters for the same reason). Inputs are cast at this boundary where the
     // surface owns the wider shape (required displayName / NangoConnectorKey

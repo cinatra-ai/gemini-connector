@@ -2,6 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HostRequiredPackageDefinition } from "@cinatra-ai/sdk-extensions";
 import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
+import { enforceLogRetention } from "./log-retention";
+import { redactAuthorizationDeep } from "./log-redaction";
+import { resolveLoggingEnabled } from "./logging-policy";
 import { getGeminiDeps } from "./deps";
 
 /**
@@ -64,8 +67,44 @@ function buildLogTimestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+// Fail-closed development-mode probe: resolves the host runtime-mode service,
+// treating any absence/error as PRODUCTION so body logging defaults OFF when the
+// signal is unavailable. Wrapped so the logging gate never throws.
+function isGeminiDevelopmentMode(): boolean {
+  try {
+    return getGeminiDeps().isAppDevelopmentMode();
+  } catch {
+    return false;
+  }
+}
+
 function isGeminiLoggingEnabled() {
-  return readSettings().loggingEnabled !== false;
+  // Default OFF in production (dev-only default-on): an explicit stored
+  // preference wins; unset follows the runtime mode.
+  return resolveLoggingEnabled(readSettings().loggingEnabled, isGeminiDevelopmentMode());
+}
+
+// Tolerant JSON extraction for a raw response-body string (mirrors the
+// openai-connector helper) so redaction can reach Authorization material nested
+// inside a JSON response instead of it surviving as an opaque string.
+function parseJsonResponseBody<T>(rawBody: string): T | null {
+  const candidates = [
+    rawBody.trim(),
+    rawBody.includes("\n") ? rawBody.split("\n").map((line) => line.trim()).find(Boolean) : undefined,
+    rawBody.includes("{") && rawBody.includes("}")
+      ? rawBody.slice(rawBody.indexOf("{"), rawBody.lastIndexOf("}") + 1).trim()
+      : undefined,
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 export async function writeGeminiLogFile(input: {
@@ -79,8 +118,17 @@ export async function writeGeminiLogFile(input: {
 
   await mkdir(GEMINI_API_LOG_DIRECTORY, { recursive: true });
   const filename = `${buildLogTimestamp()}__${sanitizeLogLabel(input.label)}__${input.kind}.json`;
-  const content = typeof input.body === "string" ? { raw: input.body } : input.body;
+  const rawContent =
+    typeof input.body === "string"
+      ? parseJsonResponseBody<unknown>(input.body) ?? { raw: input.body }
+      : input.body;
+  // Strip Bearer tokens (Authorization / authorization_token) from the logged
+  // body before it hits disk — the request body can carry the resolved in-app
+  // MCP self-client Authorization header. Ports the openai-connector redaction.
+  const content = redactAuthorizationDeep(rawContent);
   await writeFile(path.join(GEMINI_API_LOG_DIRECTORY, filename), JSON.stringify(content, null, 2), "utf8");
+  // Rotate: cap the on-disk capture so logs can't grow unbounded (best-effort).
+  await enforceLogRetention(GEMINI_API_LOG_DIRECTORY);
 }
 
 export function buildGeminiRequestHeaders(input: {
@@ -102,7 +150,10 @@ export function getGeminiAPISettings() {
   return {
     apiKey: settings.apiKey,
     lastSavedAt: settings.lastSavedAt,
-    loggingEnabled: settings.loggingEnabled ?? true,
+    // Raw stored preference (undefined when unset) — persistence paths must
+    // preserve "unset" so the runtime-mode default applies. The EFFECTIVE
+    // on/off state is exposed by getGeminiLoggingSettings().
+    loggingEnabled: settings.loggingEnabled,
   } satisfies GeminiAPISettings;
 }
 
@@ -135,9 +186,10 @@ export async function getConfiguredGeminiAPIKey() {
 }
 
 export function getGeminiLoggingSettings() {
-  const settings = getGeminiAPISettings();
+  // EFFECTIVE state: explicit stored preference wins; unset defaults OFF in
+  // production, ON in development (dev-only default-on).
   return {
-    enabled: settings.loggingEnabled !== false,
+    enabled: resolveLoggingEnabled(readSettings().loggingEnabled, isGeminiDevelopmentMode()),
     directory: GEMINI_API_LOG_DIRECTORY,
   };
 }
@@ -198,7 +250,10 @@ export async function saveGeminiAPISettings(input: {
   const nextSettings: GeminiAPISettings = {
     apiKey: undefined,
     lastSavedAt: new Date().toISOString(),
-    loggingEnabled: current.loggingEnabled ?? true,
+    // Preserve the operator's explicit logging preference; leave UNSET when
+    // never chosen so the runtime-mode default (OFF in production) applies —
+    // never silently persist default-on.
+    loggingEnabled: current.loggingEnabled,
   };
   writeSettings(nextSettings);
   return nextSettings;
@@ -214,7 +269,8 @@ export async function saveGeminiLoggingSettings(enabled: boolean) {
 export async function clearGeminiAPISettings() {
   const current = readSettings();
   writeSettings({
-    loggingEnabled: current.loggingEnabled ?? true,
+    // Preserve an explicit preference; leave UNSET otherwise (runtime default).
+    loggingEnabled: current.loggingEnabled,
   });
   const nango = geminiNango();
   const savedConnection = nango.getPrimarySavedConnection("gemini");
