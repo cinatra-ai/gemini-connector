@@ -67,6 +67,7 @@ beforeEach(() => {
       CONFIG_STORE[key] = value;
     },
     buildAppMcpSelfClientHeaders: () => ({}),
+    isAppDevelopmentMode: () => false,
     nango: {
       isConfigured,
       getPrimarySavedConnection,
