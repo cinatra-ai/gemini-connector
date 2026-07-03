@@ -59,6 +59,7 @@
       "ui"
     ],
     "sdkAbiRange": "^2",
+    "providerConfigKey": "cinatra-google-gemini",
     "uiSurface": "schema-config",
     "configSchema": {
       "title": "Gemini",
