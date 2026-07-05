@@ -2,42 +2,29 @@
 //   - a RAW JSON-STRING response body is parsed then redacted (not stored as an
 //     opaque string that would smuggle a Bearer token to disk);
 //   - the default gate is OFF in production when the preference is unset;
-//   - retention/write only happen when logging is effectively enabled.
+//   - the host-owned capture port (cinatra#981) is only ever called when
+//     logging is effectively enabled — the connector no longer touches
+//     `node:fs` directly, so this test asserts against the captured call
+//     rather than a real on-disk file.
 
-import { mkdtempSync } from "node:fs";
-import { readdir, readFile, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// Point the connector's on-disk log directory at an isolated temp dir.
-const { TMP_LOG_DIR } = vi.hoisted(() => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodeOs = require("node:os") as typeof import("node:os");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodePath = require("node:path") as typeof import("node:path");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodeFs = require("node:fs") as typeof import("node:fs");
-  return {
-    TMP_LOG_DIR: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "gemini-writer-")),
-  };
-});
-
-vi.mock("../log-directory", () => ({ GEMINI_API_LOG_DIRECTORY: TMP_LOG_DIR }));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   writeGeminiLogFile,
   registerGeminiConnector,
   _resetGeminiDepsForTests,
 } from "../index";
+import { GEMINI_LOG_CAPTURE_CHANNEL } from "../log-capture-channel";
 
 const CANARY = `CANARY_TOKEN_${Math.random().toString(36).slice(2)}_DO_NOT_LEAK`;
 
 type Config = Record<string, unknown>;
 let CONFIG: Config;
+let captured: Array<{ channel: string; entry: { label: string; kind: string; body: unknown } }>;
 
 function wireDeps(opts: { loggingEnabled?: boolean; developmentMode: boolean }) {
   CONFIG = { gemini: { loggingEnabled: opts.loggingEnabled } };
+  captured = [];
   registerGeminiConnector({
     readConnectorConfigFromDatabase: <T>(key: string, fallback: T): T =>
       (CONFIG[key] as T) ?? fallback,
@@ -47,6 +34,10 @@ function wireDeps(opts: { loggingEnabled?: boolean; developmentMode: boolean }) 
     buildAppMcpSelfClientHeaders: () => ({}),
     isAppDevelopmentMode: () => opts.developmentMode,
     nango: {} as never,
+    captureLog: async (channel, entry) => {
+      captured.push({ channel, entry });
+    },
+    captureLogDirectory: (channel) => `/host-owned/${channel}`,
   });
 }
 
@@ -54,31 +45,25 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-afterEach(async () => {
+afterEach(() => {
   _resetGeminiDepsForTests();
-  await rm(TMP_LOG_DIR, { recursive: true, force: true }).catch(() => {});
-});
-
-afterAll(async () => {
-  await rm(TMP_LOG_DIR, { recursive: true, force: true }).catch(() => {});
 });
 
 describe("writeGeminiLogFile — default-off gate + string-body redaction", () => {
-  it("does NOT write when logging is unset in production (secure default)", async () => {
+  it("does NOT call the host capture port when logging is unset in production (secure default)", async () => {
     wireDeps({ loggingEnabled: undefined, developmentMode: false });
     await writeGeminiLogFile({ label: "gemini-transcribe", kind: "request", body: { a: 1 } });
-    // Nothing written: the log dir is either absent or empty.
-    const files = await readdir(TMP_LOG_DIR).catch(() => [] as string[]);
-    expect(files).toHaveLength(0);
+    expect(captured).toHaveLength(0);
   });
 
-  it("writes when logging is unset in development (dev-only default-on)", async () => {
+  it("captures when logging is unset in development (dev-only default-on)", async () => {
     wireDeps({ loggingEnabled: undefined, developmentMode: true });
     await writeGeminiLogFile({ label: "gemini-transcribe", kind: "request", body: { a: 1 } });
-    expect((await readdir(TMP_LOG_DIR)).length).toBe(1);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe(GEMINI_LOG_CAPTURE_CHANNEL);
   });
 
-  it("parses a raw JSON-string body and redacts Authorization before it hits disk", async () => {
+  it("parses a raw JSON-string body and redacts Authorization before it reaches the host capture port", async () => {
     wireDeps({ loggingEnabled: true, developmentMode: false });
     const rawResponse = JSON.stringify({
       candidates: [{ text: "hi" }],
@@ -87,13 +72,15 @@ describe("writeGeminiLogFile — default-off gate + string-body redaction", () =
     });
     await writeGeminiLogFile({ label: "gemini-transcribe", kind: "response", body: rawResponse });
 
-    const files = await readdir(TMP_LOG_DIR);
-    expect(files).toHaveLength(1);
-    const written = await readFile(path.join(TMP_LOG_DIR, files[0]), "utf8");
+    expect(captured).toHaveLength(1);
+    const { entry } = captured[0];
+    expect(entry.label).toBe("gemini-transcribe");
+    expect(entry.kind).toBe("response");
+    const written = JSON.stringify(entry.body);
     // Parsed (not stored as an opaque {raw} string) and fully redacted.
     expect(written).not.toContain(CANARY);
     expect(written).toContain("[REDACTED]");
     expect(written).not.toContain('"raw"');
-    expect(JSON.parse(written).candidates[0].text).toBe("hi");
+    expect((entry.body as { candidates: Array<{ text: string }> }).candidates[0].text).toBe("hi");
   });
 });

@@ -87,6 +87,14 @@ export interface GeminiConnectorDeps {
   isAppDevelopmentMode: () => boolean;
   /** Nango connection-storage surface (host-bound from the nango-connector extension). */
   nango: GeminiNangoCapability;
+  /** Host-owned request/response log capture — `ctx.logger.capture` (cinatra#981).
+   *  Storage/rotation is entirely host-side; this connector still owns the
+   *  enabled/opt-in gate (`resolveLoggingEnabled`) and the Authorization
+   *  redaction, passing only an already-redacted `entry.body`. */
+  captureLog: (channel: string, entry: { label: string; kind: "request" | "response"; body: unknown }) => Promise<void>;
+  /** The host-resolved on-disk directory `captureLog` entries land in — a
+   *  read-only display value for the telemetry page (cinatra#981). */
+  captureLogDirectory: (channel: string) => string;
 }
 
 const GEMINI_DEPS_KEY = Symbol.for("@cinatra-ai/gemini-connector:host-deps/v1");

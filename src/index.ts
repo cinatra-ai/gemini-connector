@@ -1,8 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { HostRequiredPackageDefinition } from "@cinatra-ai/sdk-extensions";
-import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
-import { enforceLogRetention } from "./log-retention";
+import { GEMINI_LOG_CAPTURE_CHANNEL } from "./log-capture-channel";
 import { redactAuthorizationDeep } from "./log-redaction";
 import { resolveLoggingEnabled } from "./logging-policy";
 import { getGeminiDeps } from "./deps";
@@ -35,7 +32,7 @@ export type GeminiAPISettings = {
   loggingEnabled?: boolean;
 };
 
-export { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
+export { GEMINI_LOG_CAPTURE_CHANNEL } from "./log-capture-channel";
 
 export const geminiAPIConnectionPackage: HostRequiredPackageDefinition = {
   packageId: "@cinatra-ai/gemini-connector",
@@ -51,20 +48,6 @@ function readSettings() {
 
 function writeSettings(value: GeminiAPISettings) {
   getGeminiDeps().writeConnectorConfigToDatabase("gemini", value);
-}
-
-function sanitizeLogLabel(value: string) {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "gemini-call"
-  );
-}
-
-function buildLogTimestamp() {
-  return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
 // Fail-closed development-mode probe: resolves the host runtime-mode service,
@@ -107,6 +90,15 @@ function parseJsonResponseBody<T>(rawBody: string): T | null {
   return null;
 }
 
+/**
+ * Best-effort request/response capture through the HOST-owned
+ * `ctx.logger.capture` port (cinatra#981) — storage, directory placement, and
+ * rotation/retention are entirely host-side now (see
+ * `@cinatra-ai/sdk-extensions` `HostLoggerPort.capture`). This connector keeps
+ * ONLY the domain policy the host cannot own: the enabled/opt-in gate
+ * (`isGeminiLoggingEnabled`) and the Authorization-header redaction — the
+ * host receives an already-redacted body.
+ */
 export async function writeGeminiLogFile(input: {
   label: string;
   kind: "request" | "response";
@@ -116,8 +108,6 @@ export async function writeGeminiLogFile(input: {
     return;
   }
 
-  await mkdir(GEMINI_API_LOG_DIRECTORY, { recursive: true });
-  const filename = `${buildLogTimestamp()}__${sanitizeLogLabel(input.label)}__${input.kind}.json`;
   const rawContent =
     typeof input.body === "string"
       ? parseJsonResponseBody<unknown>(input.body) ?? { raw: input.body }
@@ -126,9 +116,11 @@ export async function writeGeminiLogFile(input: {
   // body before it hits disk — the request body can carry the resolved in-app
   // MCP self-client Authorization header. Ports the openai-connector redaction.
   const content = redactAuthorizationDeep(rawContent);
-  await writeFile(path.join(GEMINI_API_LOG_DIRECTORY, filename), JSON.stringify(content, null, 2), "utf8");
-  // Rotate: cap the on-disk capture so logs can't grow unbounded (best-effort).
-  await enforceLogRetention(GEMINI_API_LOG_DIRECTORY);
+  await getGeminiDeps().captureLog(GEMINI_LOG_CAPTURE_CHANNEL, {
+    label: input.label,
+    kind: input.kind,
+    body: content,
+  });
 }
 
 export function buildGeminiRequestHeaders(input: {
@@ -190,7 +182,9 @@ export function getGeminiLoggingSettings() {
   // production, ON in development (dev-only default-on).
   return {
     enabled: resolveLoggingEnabled(readSettings().loggingEnabled, isGeminiDevelopmentMode()),
-    directory: GEMINI_API_LOG_DIRECTORY,
+    // Host-resolved (cinatra#981) — this connector no longer owns a raw
+    // filesystem path, only the channel name.
+    directory: getGeminiDeps().captureLogDirectory(GEMINI_LOG_CAPTURE_CHANNEL),
   };
 }
 

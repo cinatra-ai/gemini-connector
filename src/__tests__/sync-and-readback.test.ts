@@ -68,6 +68,8 @@ beforeEach(() => {
     },
     buildAppMcpSelfClientHeaders: () => ({}),
     isAppDevelopmentMode: () => false,
+    captureLog: async () => {},
+    captureLogDirectory: () => "/host-owned/gemini-api",
     nango: {
       isConfigured,
       getPrimarySavedConnection,
