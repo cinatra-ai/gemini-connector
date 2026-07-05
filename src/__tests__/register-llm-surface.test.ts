@@ -18,8 +18,6 @@ vi.mock("../index", () => ({
   writeGeminiLogFile: writeGeminiLogFileMock,
 }));
 
-vi.mock("../log-directory", () => ({ GEMINI_API_LOG_DIRECTORY: "/logs/gemini" }));
-
 import { register } from "../register";
 
 type RegisteredProvider = { packageName: string; impl: Record<string, unknown> };
@@ -41,6 +39,16 @@ function activate(): RegisteredProvider {
       registerSetupSurface: () => {},
       registerSettingsSurface: () => {},
       registerAction: () => {},
+    },
+    // Ambient logger (cinatra#981) — register(ctx) reads `captureDirectory`
+    // EAGERLY to build the llm-provider-surface's `logDirectory` field.
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      capture: async () => {},
+      captureDirectory: (channel: string) => `/logs/${channel}`,
     },
   } as never;
   register(ctx);

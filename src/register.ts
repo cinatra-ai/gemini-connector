@@ -34,7 +34,7 @@ import {
   clearGeminiAPISettings,
   getGeminiAPIStatus,
 } from "./index";
-import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
+import { GEMINI_LOG_CAPTURE_CHANNEL } from "./log-capture-channel";
 
 /** The host-published action-guard service (value, NOT the SDK
  *  `requireExtensionAction` import — a runtime serverEntry graph rejects SDK
@@ -91,6 +91,14 @@ export function register(ctx: ExtensionHostContext): void {
     // Resolved LAZILY at call time (probe-safe): gates the dev-only default-on
     // for request/response body logging.
     isAppDevelopmentMode: () => runtimeMode().isDevelopment(),
+    // Host-owned capture (cinatra#981) — `ctx.logger.capture`/`captureDirectory`
+    // are ADDITIVE OPTIONAL minimum-minor methods (>=2.3.0); feature-detected so
+    // this connector still activates (logging degrades to a no-op) against an
+    // older host pinned below the 2.3.0 floor.
+    captureLog: async (channel, entry) => {
+      await ctx.logger.capture?.(channel, entry);
+    },
+    captureLogDirectory: (channel) => ctx.logger.captureDirectory?.(channel) ?? "",
     // Members delegate to the nango-system surface at CALL time (key maps are
     // getters for the same reason). Inputs are cast at this boundary where the
     // surface owns the wider shape (required displayName / NangoConnectorKey
@@ -135,7 +143,8 @@ export function register(ctx: ExtensionHostContext): void {
       getConfiguredAPIKey: () => getConfiguredGeminiAPIKey(),
       getLoggingSettings: () => getGeminiLoggingSettings(),
       saveLoggingSettings: (enabled: boolean) => saveGeminiLoggingSettings(enabled),
-      logDirectory: GEMINI_API_LOG_DIRECTORY,
+      // Host-resolved (cinatra#981) — was a connector-owned `node:fs` path.
+      logDirectory: ctx.logger.captureDirectory?.(GEMINI_LOG_CAPTURE_CHANNEL) ?? "",
       // LLM provider adapter cutover (cinatra#151 Stage 2): the host's
       // packages/llm Gemini adapter resolves these at call time instead of
       // value-importing the package. `buildRequestHeaders` carries the
