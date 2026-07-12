@@ -76,14 +76,6 @@
           ]
         },
         {
-          "kind": "advisory",
-          "label": "API key storage",
-          "tone": "info",
-          "probeActionId": "connectionServiceReady",
-          "whenReady": "API keys are stored securely via the connection service.",
-          "whenNotReady": "Configure the connection service first so Gemini API requests can authenticate."
-        },
-        {
           "kind": "status-probe",
           "label": "Connection",
           "actionId": "connectionStatus",
@@ -105,6 +97,23 @@
           "label": "Clear connection",
           "actionId": "clearConnection",
           "confirm": "Clear the stored Gemini connection?"
+        }
+      ],
+      "tabs": [
+        {
+          "id": "help",
+          "label": "Help",
+          "fields": [
+            {
+              "kind": "advisory",
+              "label": "Gemini setup",
+              "tone": "info",
+              "probeActionId": "connectionServiceReady",
+              "whenReady": "API keys are stored securely via the connection service. Use the Setup tab to update or clear your Gemini API key.",
+              "whenNotReady": "Configure the connection service first so Gemini API requests can authenticate. Once it is ready, create a key in Google AI Studio and paste it into the Setup tab's API key field, then click Save connection to store it — the key is never shown again.",
+              "description": "Read-only setup guidance — nothing on this tab is saved."
+            }
+          ]
         }
       ]
     }
