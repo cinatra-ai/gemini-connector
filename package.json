@@ -61,6 +61,19 @@
     ],
     "sdkAbiRange": "^2",
     "providerConfigKey": "cinatra-google-gemini",
+    "llmProvider": {
+      "abiVersion": 1,
+      "provider": "gemini",
+      "capabilities": {
+        "function_tools": true,
+        "media_input": true,
+        "native_mcp": { "status": "unsupported" }
+      },
+      "models": {
+        "default": "gemini-3.5-flash",
+        "allowed": ["gemini-3.5-flash"]
+      }
+    },
     "uiSurface": "schema-config",
     "configSchema": {
       "title": "Gemini",
