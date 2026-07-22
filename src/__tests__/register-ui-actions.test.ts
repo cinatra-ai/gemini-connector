@@ -87,7 +87,14 @@ describe("gemini-connector register(ctx) — schema-config named actions", () =>
     const { ctx, uiActions } = makeCtx({});
     register(ctx);
     expect(uiActions.map((a) => a.id).sort()).toEqual(
-      ["clearConnection", "connectionServiceReady", "connectionStatus", "saveConnection"].sort(),
+      [
+        "clearConnection",
+        "connectionServiceReady",
+        "connectionStatus",
+        "currentConfig",
+        "saveConnection",
+        "saveConnectionMode",
+      ].sort(),
     );
   });
 
@@ -152,5 +159,100 @@ describe("gemini-connector register(ctx) — schema-config named actions", () =>
     expect(require).toHaveBeenCalledWith("@cinatra-ai/gemini-connector", "manage");
     expect(mocks.clearGeminiAPISettings).toHaveBeenCalledOnce();
     expect(r).toEqual({ banner: "cleared" });
+  });
+
+  // ---- Connection tab (cinatra#1926) ----
+
+  // The host services the connection-mode actions read: connector-config
+  // (persisted mode) + runtime-mode (localCliEligible). `store` seeds the
+  // persisted row; `eligible` drives the resolved-transport fallback.
+  const connectionModeServices = (opts: { store?: Record<string, unknown>; eligible?: boolean } = {}) => {
+    const store = opts.store ?? {};
+    return {
+      "@cinatra-ai/host:connector-config": {
+        read: <T,>(connectorId: string, fallback: T): T =>
+          connectorId in store ? (store[connectorId] as T) : fallback,
+        write: (connectorId: string, value: unknown) => {
+          store[connectorId] = value;
+        },
+        delete: (connectorId: string) => {
+          delete store[connectorId];
+        },
+      },
+      "@cinatra-ai/host:runtime-mode": {
+        isDevelopment: () => opts.eligible ?? false,
+        localCliEligible: () => opts.eligible ?? false,
+      },
+    };
+  };
+
+  it("currentConfig hydrates the resolved transport (manage-gated); localCli only when persisted AND eligible (AC4)", async () => {
+    const guarded = makeCtx({
+      "@cinatra-ai/host:extension-action-guard": { require: vi.fn(async () => {}) },
+      ...connectionModeServices({ store: { "gemini-connection-mode": { mode: "localCli" } }, eligible: true }),
+    });
+    register(guarded.ctx);
+    expect(await actionById(guarded.uiActions, "currentConfig").handler({})).toEqual({ connectionMode: "localCli" });
+
+    _resetGeminiDepsForTests();
+    const ineligible = makeCtx({
+      "@cinatra-ai/host:extension-action-guard": { require: vi.fn(async () => {}) },
+      ...connectionModeServices({ store: { "gemini-connection-mode": { mode: "localCli" } }, eligible: false }),
+    });
+    register(ineligible.ctx);
+    expect(await actionById(ineligible.uiActions, "currentConfig").handler({})).toEqual({ connectionMode: "api" });
+  });
+
+  it("currentConfig FAILS CLOSED when the action-guard is missing (no store read)", async () => {
+    const { ctx, uiActions } = makeCtx(connectionModeServices({ eligible: true })); // no guard
+    register(ctx);
+    await expect(actionById(uiActions, "currentConfig").handler({})).rejects.toThrow(
+      /action-guard service is not registered/,
+    );
+  });
+
+  it("saveConnectionMode persists a chosen mode after the manage gate (eligible)", async () => {
+    const store: Record<string, unknown> = {};
+    const { ctx, uiActions } = makeCtx({
+      "@cinatra-ai/host:extension-action-guard": { require: vi.fn(async () => {}) },
+      ...connectionModeServices({ store, eligible: true }),
+    });
+    register(ctx);
+    const r = await actionById(uiActions, "saveConnectionMode").handler({ connectionMode: "localCli" });
+    expect(r).toEqual({ banner: "connectionSaved" });
+    expect(store["gemini-connection-mode"]).toEqual({ mode: "localCli" });
+  });
+
+  it("saveConnectionMode REJECTS a forged localCli write on an INELIGIBLE install (server-side gate)", async () => {
+    const store: Record<string, unknown> = {};
+    const { ctx, uiActions } = makeCtx({
+      "@cinatra-ai/host:extension-action-guard": { require: vi.fn(async () => {}) },
+      ...connectionModeServices({ store, eligible: false }),
+    });
+    register(ctx);
+    const r = await actionById(uiActions, "saveConnectionMode").handler({ connectionMode: "localCli" });
+    expect(r).toEqual({ banner: "error" });
+    expect(store["gemini-connection-mode"]).toBeUndefined();
+  });
+
+  it("saveConnectionMode persists a deliberate localCli → api switch (no no-loss trap)", async () => {
+    const store: Record<string, unknown> = { "gemini-connection-mode": { mode: "localCli" } };
+    const { ctx, uiActions } = makeCtx({
+      "@cinatra-ai/host:extension-action-guard": { require: vi.fn(async () => {}) },
+      ...connectionModeServices({ store, eligible: true }),
+    });
+    register(ctx);
+    await actionById(uiActions, "saveConnectionMode").handler({ connectionMode: "api" });
+    expect(store["gemini-connection-mode"]).toEqual({ mode: "api" });
+  });
+
+  it("saveConnectionMode FAILS CLOSED when the action-guard is missing (no write)", async () => {
+    const store: Record<string, unknown> = {};
+    const { ctx, uiActions } = makeCtx(connectionModeServices({ store, eligible: true })); // no guard
+    register(ctx);
+    await expect(
+      actionById(uiActions, "saveConnectionMode").handler({ connectionMode: "localCli" }),
+    ).rejects.toThrow(/action-guard service is not registered/);
+    expect(store["gemini-connection-mode"]).toBeUndefined();
   });
 });

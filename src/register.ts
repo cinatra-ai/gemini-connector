@@ -36,6 +36,15 @@ import {
   getGeminiAPIStatus,
 } from "./index";
 import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
+// Connection-mode (API vs local CLI) selector persistence + transport resolution
+// (cinatra#1926). The gated `localCli` option is stripped server-side by the host
+// setup route when ineligible; these handlers add the WRITE-side rejection +
+// hydration, all consuming the same host `localCliEligible` predicate.
+import {
+  decideConnectionModeWrite,
+  getResolvedConnectionTransport,
+  saveConnectionMode,
+} from "./connection-mode";
 // The relocated Gemini request-translation adapter (llm-providers S4,
 // cinatra#1715). The host's packages/llm resolves this connector's
 // `createAdapter()` factory through the `llm-provider-adapter` capability
@@ -51,8 +60,15 @@ type HostActionGuard = {
 
 /** Local STRUCTURAL shape of the host runtime-mode service (id
  *  `@cinatra-ai/host:runtime-mode`) — mirrors openai-connector. Kept SDK-type-
- *  free so the serverEntry graph carries no host-peer value import. */
-type HostRuntimeModeShape = { isDevelopment(): boolean };
+ *  free so the serverEntry graph carries no host-peer value import.
+ *  cinatra#1926: the service ALSO carries the single local-CLI eligibility
+ *  predicate. `localCliEligible` is OPTIONAL here so the binding stays
+ *  fail-closed against a host that predates it (a missing member ⇒ the local-CLI
+ *  mode stays hidden / write-rejected / API-only). */
+type HostRuntimeModeShape = {
+  isDevelopment(): boolean;
+  localCliEligible?(): boolean;
+};
 
 const PACKAGE_NAME = "@cinatra-ai/gemini-connector";
 
@@ -97,6 +113,9 @@ export function register(ctx: ExtensionHostContext): void {
     // Resolved LAZILY at call time (probe-safe): gates the dev-only default-on
     // for request/response body logging.
     isAppDevelopmentMode: () => runtimeMode().isDevelopment(),
+    // cinatra#1926: consume the host's single localCliEligible predicate. Optional
+    // chaining + `=== true` fail closed (a host without the member ⇒ ineligible).
+    localCliEligible: () => runtimeMode().localCliEligible?.() === true,
     // Members delegate to the nango-system surface at CALL time (key maps are
     // getters for the same reason). Inputs are cast at this boundary where the
     // surface owns the wider shape (required displayName / NangoConnectorKey
@@ -267,6 +286,49 @@ export function register(ctx: ExtensionHostContext): void {
       await requireManage();
       await clearGeminiAPISettings();
       return { banner: "cleared" };
+    },
+  });
+
+  // ---- Connection tab (cinatra#1926) ----
+
+  // READ/HYDRATE (manage-gated): the manifest's root hydrateAction. Pre-fills the
+  // Connection tab's `connectionMode` select with the RESOLVED transport (not the
+  // raw persisted value) — so an ineligible installation (where the server
+  // stripped the `localCli` option) pre-fills `api`, never a now-absent option;
+  // eligible + persisted `localCli` pre-fills `localCli`. Side-effect-free
+  // idempotent read; the host calls it on every setup render and fail-closes to a
+  // blank form on any throw. NEVER returns a secret.
+  ctx.ui.registerAction({
+    id: "currentConfig",
+    handler: async (): Promise<Record<string, string>> => {
+      await requireManage();
+      return { connectionMode: getResolvedConnectionTransport() };
+    },
+  });
+
+  // WRITE (manage-gated): persist the API-vs-local-CLI connection mode. This is
+  // the Connection tab's OWN save, so the selector is self-contained and
+  // saveable. SERVER-SIDE enforcement via the pure `decideConnectionModeWrite`
+  // policy: a forged write selecting `localCli` on an ineligible installation is
+  // REJECTED (defense in depth over the option being stripped from the rendered
+  // DOM), consuming the SAME host `localCliEligible` predicate — never a client
+  // value.
+  ctx.ui.registerAction({
+    id: "saveConnectionMode",
+    handler: async (input: unknown): Promise<{ banner: string }> => {
+      await requireManage();
+      const fields =
+        input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+      const decision = decideConnectionModeWrite(fields.connectionMode, {
+        localCliEligible: getGeminiDeps().localCliEligible(),
+      });
+      if (!decision.ok) {
+        return { banner: "error" };
+      }
+      if (decision.persist) {
+        saveConnectionMode(decision.persist);
+      }
+      return { banner: "connectionSaved" };
     },
   });
 }

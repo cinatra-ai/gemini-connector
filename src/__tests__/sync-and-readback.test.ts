@@ -68,6 +68,7 @@ beforeEach(() => {
     },
     buildAppMcpSelfClientHeaders: () => ({}),
     isAppDevelopmentMode: () => false,
+    localCliEligible: () => false,
     nango: {
       isConfigured,
       getPrimarySavedConnection,

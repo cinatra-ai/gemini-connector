@@ -46,6 +46,7 @@ function wireDeps(opts: { loggingEnabled?: boolean; developmentMode: boolean }) 
     },
     buildAppMcpSelfClientHeaders: () => ({}),
     isAppDevelopmentMode: () => opts.developmentMode,
+    localCliEligible: () => opts.developmentMode,
     nango: {} as never,
   });
 }
