@@ -20,6 +20,7 @@
     "lint": "eslint . --no-inline-config"
   },
   "dependencies": {
+    "@google/genai": "^2.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "radix-ui": "^1.4.3",
