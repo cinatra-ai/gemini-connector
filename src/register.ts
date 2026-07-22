@@ -18,6 +18,7 @@ import type {
   HostConnectorConfigService,
   HostMcpSelfClientService,
   NangoSystemSurface,
+  LlmProviderAdapterSurface,
 } from "@cinatra-ai/sdk-extensions";
 import {
   registerGeminiConnector,
@@ -35,6 +36,11 @@ import {
   getGeminiAPIStatus,
 } from "./index";
 import { GEMINI_API_LOG_DIRECTORY } from "./log-directory";
+// The relocated Gemini request-translation adapter (llm-providers S4,
+// cinatra#1715). The host's packages/llm resolves this connector's
+// `createAdapter()` factory through the `llm-provider-adapter` capability
+// instead of its in-core `providers/gemini.ts` switch.
+import { createGeminiProviderAdapter } from "./adapter/gemini-adapter";
 
 /** The host-published action-guard service (value, NOT the SDK
  *  `requireExtensionAction` import — a runtime serverEntry graph rejects SDK
@@ -154,6 +160,38 @@ export function register(ctx: ExtensionHostContext): void {
       writeLogFile: (input: { label: string; kind: "request" | "response"; body: unknown }) =>
         writeGeminiLogFile({ label: input.label, kind: input.kind, body: input.body }),
     },
+  });
+
+  // ---- llm-provider-adapter surface (llm-providers S4, cinatra#1715) ----
+  //
+  // The full Gemini request-translation adapter now lives IN this connector
+  // (relocated from the host's packages/llm `providers/gemini.ts`). The host's
+  // packages/llm resolves the adapter through this NEW versioned
+  // `llm-provider-adapter` capability instead of its in-core factory switch:
+  // once a trusted surface is registered the host calls `createAdapter()` and
+  // does NOT fall back to the legacy in-core factory (the host fails CLOSED on
+  // an abiVersion it does not recognise). `createAdapter()` resolves the
+  // connector-owned API key internally and returns null when the connector is
+  // present-but-unconfigured — an AUTHORITATIVE "not configured" (the registry's
+  // existing null-adapter semantics; no new error class). Registration does no
+  // host I/O (probe-safe). The capability-id is a string literal because it stays
+  // host-fenced in the SDK (`./internal`), exactly like the S1 surface above.
+  ctx.capabilities.registerProvider("llm-provider-adapter", {
+    packageName: PACKAGE_NAME,
+    impl: {
+      // ABI v1 is inlined as a literal (NOT value-imported from the host-peer
+      // SDK — the host-peer-value-import ban keeps @cinatra-ai/sdk-extensions
+      // TYPE-only over the serverEntry graph). The `satisfies
+      // LlmProviderAdapterSurface` below type-checks this literal against the
+      // leaf's `typeof LLM_PROVIDER_ADAPTER_ABI_VERSION`, so an ABI bump breaks
+      // the build here rather than drifting silently.
+      abiVersion: 1,
+      providerId: "gemini",
+      createAdapter: async () => {
+        const apiKey = await getConfiguredGeminiAPIKey();
+        return apiKey ? createGeminiProviderAdapter(apiKey) : null;
+      },
+    } satisfies LlmProviderAdapterSurface,
   });
 
   // ---- schema-config named actions (cinatra#782) ----
