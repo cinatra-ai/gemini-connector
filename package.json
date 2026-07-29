@@ -63,7 +63,7 @@
     "sdkAbiRange": "^2",
     "providerConfigKey": "cinatra-google-gemini",
     "llmProvider": {
-      "abiVersion": 1,
+      "abiVersion": 2,
       "provider": "gemini",
       "capabilities": {
         "function_tools": true,
@@ -73,7 +73,9 @@
       "models": {
         "default": "gemini-3.5-flash",
         "allowed": ["gemini-3.5-flash"]
-      }
+      },
+      "defaultCapable": true,
+      "wizardEligible": false
     },
     "uiSurface": "schema-config",
     "configSchema": {
