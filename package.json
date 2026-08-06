@@ -54,6 +54,7 @@
       "name": "Cinatra"
     },
     "displayName": "Gemini",
+    "logo": "./cinatra/logo.svg",
     "dependencies": [],
     "serverEntry": "./register",
     "requestedHostPorts": [
