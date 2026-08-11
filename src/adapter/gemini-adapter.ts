@@ -21,6 +21,7 @@ import type {
   StreamInput,
   LlmResponse,
   LlmUsageData,
+  LlmImageResponse,
 } from "@cinatra-ai/sdk-extensions/llm-provider-adapter-contract";
 // Native attachment emission is guarded; legacy behavior remains byte-identical
 // when no resolvedAttachments are present. The gemini value slices (the
@@ -37,6 +38,17 @@ import { BatchNotSupportedError } from "./adapter-floor";
 import { SANDBOX_EXECUTE_TOOL_NAME } from "./adapter-floor";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+
+/**
+ * The image model `generateImage` falls back to when the caller names none.
+ *
+ * NAMED rather than inlined (cinatra#2641) because it is now reported back to
+ * the host on every image response, and the host prices the row off a per-image
+ * rate card keyed by exactly this string. Changing it changes which rate the
+ * ledger looks up, so it should be visible as a constant and not buried in an
+ * expression.
+ */
+export const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
 
 const MAX_TOOL_RESULT_CHARS = 8000;
 
@@ -771,12 +783,24 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
     // -----------------------------------------------------------------------
     // generateImage — image generation via Gemini
     // -----------------------------------------------------------------------
+    //
+    // REPORTS ITS OWN USAGE (cinatra#2641). Gemini bills image generation PER
+    // PRODUCED IMAGE, and the host's metering seam books a `usage_events` row
+    // for every call. Until this adapter reported something, that row could only
+    // be COUNTED: the answer named no model and stated no quantity, so the
+    // ledger showed the call with an "unknown" cost. The ABI's optional
+    // `LlmImageResponse.model` + `.usage` close that — the host prices the row
+    // off a per-image rate card keyed by the model named here.
+    //
+    // Both fields are OPTIONAL on the ABI, so this is purely additive: an older
+    // host that does not read them is unaffected, and the response the caller
+    // destructures (`imageData` / `mimeType`) is byte-identical.
     async generateImage(input: {
       model?: string;
       prompt: string;
       logLabel?: string;
-    }): Promise<{ imageData: string; mimeType: string } | null> {
-      const imageModel = input.model ?? "gemini-2.5-flash-image";
+    }): Promise<LlmImageResponse | null> {
+      const imageModel = input.model ?? DEFAULT_GEMINI_IMAGE_MODEL;
       const logLabel = input.logLabel ?? "gemini-image-generate";
 
       await writeGeminiLogFile({
@@ -796,20 +820,71 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
         } as Record<string, unknown>,
       });
 
-      // Extract inline image data from response
-      const candidates = response.candidates ?? [];
-      for (const candidate of candidates) {
+      // Collect every inline IMAGE the response carried, then return the first.
+      //
+      // COUNTING ALL OF THEM IS THE POINT, even though only one is returned:
+      // Gemini bills each image it produced, so reporting `1` when the response
+      // held several would under-price the call. This loop is what makes the
+      // reported count a MEASUREMENT of the answer rather than an assumption
+      // about it. In today's single-candidate configuration it is 1.
+      //
+      // `image/` ONLY, and that guard is load-bearing now: an `inlineData` part
+      // is not necessarily an image, and this count is multiplied by a per-image
+      // rate on the host side. Before the count existed, a non-image part could
+      // at worst be returned as a broken payload; now it could invent money.
+      const images: Array<{ imageData: string; mimeType: string }> = [];
+      for (const candidate of response.candidates ?? []) {
         for (const part of candidate.content?.parts ?? []) {
           const inlineData = part.inlineData;
-          if (inlineData?.mimeType && inlineData?.data) {
-            await writeGeminiLogFile({
-              label: logLabel,
-              kind: "response",
-              body: { mimeType: inlineData.mimeType, dataLength: inlineData.data.length },
-            });
-            return { imageData: inlineData.data, mimeType: inlineData.mimeType };
+          if (
+            inlineData?.data &&
+            inlineData.mimeType &&
+            inlineData.mimeType.startsWith("image/")
+          ) {
+            images.push({ imageData: inlineData.data, mimeType: inlineData.mimeType });
           }
         }
+      }
+
+      // Gemini bills the PROMPT of an image request as well as the images
+      // ($0.30 per 1M input tokens against $0.039 per image, standard tier), so
+      // the host cannot state a complete cost from the image count alone. This
+      // is the provider's own count, read off the response — never an estimate.
+      const promptTokens = response.usageMetadata?.promptTokenCount;
+
+      const first = images[0];
+      if (first) {
+        await writeGeminiLogFile({
+          label: logLabel,
+          kind: "response",
+          body: {
+            mimeType: first.mimeType,
+            dataLength: first.imageData.length,
+            images: images.length,
+          },
+        });
+        return {
+          imageData: first.imageData,
+          mimeType: first.mimeType,
+          // The model this adapter ADDRESSED — the defaulted image model
+          // whenever the caller named none, and exactly the string the host's
+          // rate card looks up. Reported explicitly because the host refuses to
+          // price a row whose model it had to guess from the request.
+          //
+          // NOT `response.modelVersion`, which the API also returns: that names
+          // a resolved point VERSION, and the rate card is keyed by the model
+          // identifier a request is billed against — the one sent here. Feeding
+          // it a version string would miss the card and leave the row unpriced.
+          model: imageModel,
+          usage: {
+            images: images.length,
+            // Omitted rather than defaulted when the response carried no usage
+            // metadata: a `0` would state the prompt was free, and the host
+            // would price the images and silently drop the prompt charge. Absent
+            // leaves the whole row unpriced, which is the truthful outcome.
+            ...(typeof promptTokens === "number" ? { inputTokens: promptTokens } : {}),
+          },
+        };
       }
 
       await writeGeminiLogFile({
@@ -818,6 +893,11 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
         body: { error: "No image returned" },
       });
 
+      // NO usage is reported here on purpose. The response carried no image
+      // part, so the number of images Gemini billed for is not something this
+      // adapter can read off it — and a reported `0` would state that the call
+      // was free. The host still counts the invocation and leaves its cost
+      // unknown, which is the truthful outcome.
       return null;
     },
 
