@@ -204,6 +204,26 @@ function translateTools(tools: LlmTool[]): FunctionDeclaration[] {
   return defs;
 }
 
+/**
+ * The `tools` block for a request, or nothing at all (cinatra#2776).
+ *
+ * Gemini is the conversation-only provider: it declares no native MCP, so a
+ * chat turn whose only toolbox is the self-MCP catalog reaches this adapter
+ * with an EMPTY translated tool list. Emitting the container anyway put
+ * `"tools":[{"functionDeclarations":[]}]` on the wire — a tool block that
+ * declares nothing, which is neither the conversation-only shape the routing
+ * policy promises nor a legitimate tool request. A tool-less request must
+ * carry no top-level `tools` key at all, so the block is emitted only when it
+ * carries at least one declaration.
+ */
+function geminiToolsConfig(
+  toolDefs: FunctionDeclaration[] | undefined,
+): { tools: [{ functionDeclarations: FunctionDeclaration[] }] } | Record<string, never> {
+  return toolDefs && toolDefs.length > 0
+    ? { tools: [{ functionDeclarations: toolDefs }] }
+    : {};
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -293,7 +313,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             responseMimeType: input.outputSchema ? "application/json" : undefined,
             responseJsonSchema: input.outputSchema,
           },
-          ...(toolDefs ? { tools: [{ functionDeclarations: toolDefs }] } : {}),
+          ...geminiToolsConfig(toolDefs),
         };
 
         await writeGeminiLogFile({ label: `${logLabel}-step-${step + 1}`, kind: "request", body: requestPreview });
@@ -307,7 +327,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             responseMimeType: input.outputSchema ? "application/json" : undefined,
             responseJsonSchema: input.outputSchema,
             abortSignal: input.signal,
-            ...(toolDefs ? { tools: [{ functionDeclarations: toolDefs }] } : {}),
+            ...geminiToolsConfig(toolDefs),
           },
         });
 
@@ -453,7 +473,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
         await writeGeminiLogFile({
           label: `${logLabel}-step-${step + 1}`,
           kind: "request",
-          body: { model: resolvedModel, contents, tools: toolDefs ? [{ functionDeclarations: toolDefs }] : undefined },
+          body: { model: resolvedModel, contents, ...geminiToolsConfig(toolDefs) },
         });
 
         const response = await client.models.generateContentStream({
@@ -463,7 +483,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             systemInstruction: input.system,
             maxOutputTokens: input.maxTokens ?? 4096,
             abortSignal: input.signal,
-            ...(toolDefs ? { tools: [{ functionDeclarations: toolDefs }] } : {}),
+            ...geminiToolsConfig(toolDefs),
           },
         });
 
