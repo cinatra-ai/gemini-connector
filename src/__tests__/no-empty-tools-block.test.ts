@@ -105,6 +105,13 @@ const functionTool: LlmTool = {
     properties: { email: { type: "string" } },
     required: ["email"],
   },
+  // `LlmFunctionTool.execute` is REQUIRED by the host contract
+  // (`@cinatra-ai/sdk-extensions/llm-provider-adapter-contract`). This package
+  // runs vitest + eslint but no `tsc`, so the omission only surfaced in the
+  // HOST's repo-wide typecheck once the pin moved here. Never called: these
+  // cases assert the serialized request body, and the synthetic reply carries
+  // no function call.
+  execute: async () => ({}),
 };
 
 const streamCallbacks: Omit<StreamInput, "system" | "messages"> = {
