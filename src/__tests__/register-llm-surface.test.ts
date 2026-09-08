@@ -19,6 +19,7 @@ vi.mock("../index", () => ({
 }));
 
 import { register } from "../register";
+import { GEMINI_LOG_CAPTURE_CHANNEL } from "../log-capture-channel";
 
 type RegisteredProvider = { packageName: string; impl: Record<string, unknown> };
 
@@ -90,6 +91,39 @@ describe("register(ctx) — Stage 2 llm-provider-surface members", () => {
       kind: "response",
       body: "raw",
     });
+  });
+
+  it("publishes a HOST-RESOLVED logDirectory, never a connector-owned path", () => {
+    // cinatra#981: the surface's `logDirectory` is whatever the host's ambient
+    // `ctx.logger.captureDirectory(channel)` returns for this connector's
+    // capture channel — the connector owns the channel NAME and nothing else.
+    const { impl } = activate();
+    expect(GEMINI_LOG_CAPTURE_CHANNEL).toBe("gemini-api");
+    expect(impl.logDirectory).toBe(`/logs/${GEMINI_LOG_CAPTURE_CHANNEL}`);
+  });
+
+  it("still activates against a host below the 2.3.0 capture floor (empty logDirectory)", () => {
+    // `capture`/`captureDirectory` are ADDITIVE OPTIONAL methods; a host pinned
+    // below the SDK ABI 2.3.0 floor publishes neither. Registration must not
+    // throw there — the display value degrades to "".
+    const registered: RegisteredProvider[] = [];
+    const ctx = {
+      capabilities: {
+        registerProvider: (capability: string, provider: RegisteredProvider) => {
+          if (capability === "llm-provider-surface") registered.push(provider);
+        },
+        resolveProviders: () => [],
+      },
+      ui: {
+        registerSetupSurface: () => {},
+        registerSettingsSurface: () => {},
+        registerAction: () => {},
+      },
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    } as never;
+    expect(() => register(ctx)).not.toThrow();
+    expect(registered).toHaveLength(1);
+    expect(registered[0].impl.logDirectory).toBe("");
   });
 
   it("registration stays probe-safe (no I/O, no host-service calls at register time)", () => {

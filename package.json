@@ -11,8 +11,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./register": "./src/register.ts",
-    "./log-directory": "./src/log-directory.ts"
+    "./register": "./src/register.ts"
   },
   "types": "src/index.ts",
   "scripts": {
@@ -20,6 +19,7 @@
     "lint": "eslint . --no-inline-config"
   },
   "dependencies": {
+    "@google/genai": "^2.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "radix-ui": "^1.4.3",
@@ -40,8 +40,8 @@
     }
   },
   "devDependencies": {
-    "@typescript-eslint/parser": "8.61.0",
-    "eslint": "10.4.1",
+    "@typescript-eslint/parser": "8.65.0",
+    "eslint": "10.8.0",
     "typescript": "5.9.3"
   },
   "cinatra": {
@@ -53,6 +53,7 @@
       "name": "Cinatra"
     },
     "displayName": "Gemini",
+    "logo": "./cinatra/logo.svg",
     "dependencies": [],
     "serverEntry": "./register",
     "requestedHostPorts": [
@@ -61,6 +62,21 @@
     ],
     "sdkAbiRange": "^2",
     "providerConfigKey": "cinatra-google-gemini",
+    "llmProvider": {
+      "abiVersion": 2,
+      "provider": "gemini",
+      "capabilities": {
+        "function_tools": true,
+        "media_input": true,
+        "native_mcp": { "status": "unsupported" }
+      },
+      "models": {
+        "default": "gemini-3.5-flash",
+        "allowed": ["gemini-3.5-flash"]
+      },
+      "defaultCapable": true,
+      "wizardEligible": false
+    },
     "uiSurface": "schema-config",
     "configSchema": {
       "title": "Gemini",
@@ -74,14 +90,6 @@
             { "name": "cleared", "tone": "warning", "message": "Gemini connection cleared." },
             { "name": "error", "tone": "destructive", "message": "Something went wrong." }
           ]
-        },
-        {
-          "kind": "advisory",
-          "label": "API key storage",
-          "tone": "info",
-          "probeActionId": "connectionServiceReady",
-          "whenReady": "API keys are stored securely via the connection service.",
-          "whenNotReady": "Configure the connection service first so Gemini API requests can authenticate."
         },
         {
           "kind": "status-probe",
@@ -105,6 +113,23 @@
           "label": "Clear connection",
           "actionId": "clearConnection",
           "confirm": "Clear the stored Gemini connection?"
+        }
+      ],
+      "tabs": [
+        {
+          "id": "help",
+          "label": "Help",
+          "fields": [
+            {
+              "kind": "advisory",
+              "label": "Gemini setup",
+              "tone": "info",
+              "probeActionId": "connectionServiceReady",
+              "whenReady": "API keys are stored securely via the connection service. Use the Setup tab to update or clear your Gemini API key.",
+              "whenNotReady": "Configure the connection service first so Gemini API requests can authenticate. Once it is ready, create a key in Google AI Studio and paste it into the Setup tab's API key field, then click Save connection to store it — the key is never shown again.",
+              "description": "Read-only setup guidance — nothing on this tab is saved."
+            }
+          ]
         }
       ]
     }

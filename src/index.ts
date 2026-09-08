@@ -116,7 +116,9 @@ export async function writeGeminiLogFile(input: {
   // body before it hits disk — the request body can carry the resolved in-app
   // MCP self-client Authorization header. Ports the openai-connector redaction.
   const content = redactAuthorizationDeep(rawContent);
-  await getGeminiDeps().captureLog(GEMINI_LOG_CAPTURE_CHANNEL, {
+  // Optional at the deps layer too (see GeminiConnectorDeps.captureLog): a
+  // host that wired no capture port degrades to a no-op write.
+  await getGeminiDeps().captureLog?.(GEMINI_LOG_CAPTURE_CHANNEL, {
     label: input.label,
     kind: input.kind,
     body: content,
@@ -184,7 +186,7 @@ export function getGeminiLoggingSettings() {
     enabled: resolveLoggingEnabled(readSettings().loggingEnabled, isGeminiDevelopmentMode()),
     // Host-resolved (cinatra#981) — this connector no longer owns a raw
     // filesystem path, only the channel name.
-    directory: getGeminiDeps().captureLogDirectory(GEMINI_LOG_CAPTURE_CHANNEL),
+    directory: getGeminiDeps().captureLogDirectory?.(GEMINI_LOG_CAPTURE_CHANNEL) ?? "",
   };
 }
 
