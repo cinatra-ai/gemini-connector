@@ -11,8 +11,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./register": "./src/register.ts",
-    "./log-directory": "./src/log-directory.ts"
+    "./register": "./src/register.ts"
   },
   "types": "src/index.ts",
   "scripts": {

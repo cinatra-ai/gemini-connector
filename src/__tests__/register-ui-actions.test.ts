@@ -27,8 +27,6 @@ vi.mock("../index", () => ({
   getGeminiAPIStatus: mocks.getGeminiAPIStatus,
 }));
 
-vi.mock("../log-directory", () => ({ GEMINI_API_LOG_DIRECTORY: "/tmp" }));
-
 import { register } from "../register";
 import { _resetGeminiDepsForTests } from "../deps";
 
@@ -61,6 +59,16 @@ function makeCtx(services: Record<string, unknown>) {
         registerAction: (action: UiAction) => {
           uiActions.push(action);
         },
+      },
+      // Ambient logger (cinatra#981) — register(ctx) reads `captureDirectory`
+      // EAGERLY to build the llm-provider-surface's `logDirectory` field.
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        capture: async () => {},
+        captureDirectory: (channel: string) => `/tmp/${channel}`,
       },
     } as unknown as Parameters<typeof register>[0],
     uiActions,
