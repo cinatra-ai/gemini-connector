@@ -22,6 +22,7 @@
  *   - a real function tool → `tools` present, carrying that declaration, so
  *     the fix suppresses only the EMPTY block.
  */
+import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../index", () => ({
@@ -46,7 +47,7 @@ const generateReply = () =>
     JSON.stringify({
       candidates: [{ content: { parts: [{ text: "hello" }], role: "model" } }],
       usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, totalTokenCount: 4 },
-      modelVersion: "gemini-2.5-flash-001",
+      modelVersion: "gemini-3.5-flash-001",
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
@@ -56,7 +57,7 @@ const streamReply = () => {
   const chunk = {
     candidates: [{ content: { parts: [{ text: "hello" }], role: "model" } }],
     usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, totalTokenCount: 4 },
-    modelVersion: "gemini-2.5-flash-001",
+    modelVersion: "gemini-3.5-flash-001",
   };
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -140,6 +141,28 @@ const runGenerate = (tools: LlmTool[] | undefined) =>
     prompt: "hi",
     tools,
   });
+
+describe("cinatra#1714 — the declared Gemini default reaches every text/media wire", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  const models = manifest.cinatra.llmProvider.models;
+
+  it("advertises the same sole model as its manifest", () => {
+    expect(models).toEqual({ default: "gemini-3.5-flash", allowed: ["gemini-3.5-flash"] });
+    expect(adapter().defaultModel).toBe(models.default);
+  });
+
+  it.each(["generate", "stream", "media"])("defaults %s requests to the declared model", async (operation) => {
+    if (operation === "generate") await runGenerate(undefined);
+    else if (operation === "stream") await runStream(undefined);
+    else await adapter().generateFromMediaFile!({
+      system: "Transcribe this audio.",
+      mediaFileUri: "https://generativelanguage.googleapis.com/v1beta/files/test-audio",
+      mimeType: "audio/wav",
+    });
+    expect(urls).toHaveLength(1);
+    expect(new URL(urls[0]).pathname).toContain(`/models/${models.default}:`);
+  });
+});
 
 describe("cinatra#2776 — Gemini emits no empty tools block", () => {
   describe("generate", () => {
