@@ -37,7 +37,7 @@ import { BatchNotSupportedError } from "./adapter-floor";
 // translation is a named function declaration; dispatch keys on this name.
 import { SANDBOX_EXECUTE_TOOL_NAME } from "./adapter-floor";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 
 /**
  * The image model `generateImage` falls back to when the caller names none.
@@ -929,7 +929,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
       const models: string[] = [];
       for await (const model of pager) {
         if (model.name) {
-          // Gemini model names are like "models/gemini-2.5-flash" — strip the prefix
+          // Gemini model names are like "models/gemini-3.5-flash" — strip the prefix
           const name = model.name.replace(/^models\//, "");
           models.push(name);
         }

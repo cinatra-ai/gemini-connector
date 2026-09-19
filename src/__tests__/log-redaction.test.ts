@@ -11,7 +11,7 @@ const CANARY = `CANARY_TOKEN_${Math.random().toString(36).slice(2)}_DO_NOT_LEAK`
 describe("redactAuthorizationDeep (@cinatra-ai/gemini-connector copy)", () => {
   it("replaces Authorization anywhere in the tree with [REDACTED] and leaves the canary nowhere", () => {
     const body = {
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       headers: { Authorization: `Bearer ${CANARY}` },
       mcp_servers: [
         { name: "x", authorization_token: CANARY },
@@ -25,7 +25,7 @@ describe("redactAuthorizationDeep (@cinatra-ai/gemini-connector copy)", () => {
     expect(serialized).not.toContain(CANARY);
     expect(serialized).toContain("[REDACTED]");
     // Non-secret structure preserved.
-    expect(JSON.parse(serialized).model).toBe("gemini-2.5-flash");
+    expect(JSON.parse(serialized).model).toBe("gemini-3.5-flash");
   });
 
   it("is a no-op for primitives / non-authorization keys", () => {
