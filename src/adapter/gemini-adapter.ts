@@ -770,9 +770,6 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             ],
           },
         ],
-        config: {
-          temperature: 0.2,
-        },
       });
 
       // Extract usage metadata so the media
