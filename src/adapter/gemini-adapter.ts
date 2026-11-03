@@ -230,15 +230,17 @@ function geminiToolsConfig(
  * `gemini-3.5-flash-lite` defaults to minimal thinking, and Google advises a
  * thinking level of medium or higher for tool calling. The level is set only
  * when the request declares at least one function and the model id starts
- * with `gemini-3.5-flash-lite`: Gemini 2.5 models reject `thinkingLevel`, so
- * every other model, and every request without a declaration, gets no
- * thinking config.
+ * with `gemini-3.5-flash-lite` (the resource form `models/gemini-3.5-flash-lite`
+ * counts as the same id): Gemini 2.5 models reject `thinkingLevel`, so every
+ * other model, and every request without a declaration, gets no thinking
+ * config.
  */
 function geminiThinkingConfig(
   model: string,
   toolDefs: FunctionDeclaration[] | undefined,
 ): { thinkingConfig: ThinkingConfig } | Record<string, never> {
-  return toolDefs && toolDefs.length > 0 && model.startsWith("gemini-3.5-flash-lite")
+  const modelId = model.replace(/^models\//, "");
+  return toolDefs && toolDefs.length > 0 && modelId.startsWith("gemini-3.5-flash-lite")
     ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM } }
     : {};
 }
