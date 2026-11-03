@@ -22,8 +22,12 @@
  *     and the host-side synthetic id never reaches the wire);
  *   - stream: several chunks per turn, including text-only chunks that carry
  *     a signature (one with text, one with empty text);
+ *   - a thought part (`thought: true`) with a signature comes back in place;
+ *   - a `sandbox_execute` response carries its call id, and a call whose id is
+ *     the empty string is answered without an id (the host gets the synthetic id);
  *   - `thinkingConfig.thinkingLevel` is `MEDIUM` for `gemini-3.5-flash-lite*`
- *     with at least one function declaration, and absent otherwise.
+ *     (also with the `models/` prefix) with at least one function declaration,
+ *     and absent otherwise.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -35,6 +39,7 @@ vi.mock("../index", () => ({
 import { createGeminiProviderAdapter } from "../adapter/gemini-adapter";
 import type {
   LlmFunctionTool,
+  LlmSandboxExecutionTool,
   LlmShellTool,
   LlmTool,
   LlmToolCall,
@@ -146,6 +151,14 @@ const shellTool: LlmShellTool = {
     })),
 };
 
+const sandboxTool: LlmSandboxExecutionTool = {
+  type: "sandbox_execution",
+  toolName: "sandbox_execute",
+  description: "Execute shell commands in an isolated sandbox.",
+  execute: async (action) =>
+    action.commands.map(() => ({ stdout: "sandbox-ok", stderr: "", outcome: { type: "exit" as const, exitCode: 0 } })),
+};
+
 const selfMcpTool: LlmTool = {
   type: "mcp",
   serverLabel: "cinatra",
@@ -171,6 +184,8 @@ const callShell: WirePart = {
   functionCall: { id: "call-c", name: "shell", args: { commands: ["cat report.json"] } },
   thoughtSignature: "c2lnLUM=",
 };
+/** A thought part with a signature: it must come back in place, unchanged. */
+const thoughtPart: WirePart = { text: "Planning the two lookups.", thought: true, thoughtSignature: "c2lnLVA=" };
 /** A call with NO id: its response must carry no id either. */
 const callNoId: WirePart = { functionCall: { name: "failing_tool", args: {} } };
 
@@ -190,7 +205,7 @@ const step2Responses: WirePart[] = [
 // ---------------------------------------------------------------------------
 
 describe("cinatra#4474 — generate replays the model's own parts", () => {
-  const step1: WirePart[] = [{ text: "Looking both up." }, callA, callB];
+  const step1: WirePart[] = [thoughtPart, { text: "Looking both up." }, callA, callB];
   const step2: WirePart[] = [callShell, callNoId];
   const step3: WirePart[] = [{ text: "Both contacts found; the report is ok." }];
 
@@ -247,6 +262,7 @@ describe("cinatra#4474 — generate replays the model's own parts", () => {
 describe("cinatra#4474 — stream replays the parts of every chunk", () => {
   /** A text-only chunk that carries a signature, a plain text chunk, then one call per chunk. */
   const step1Chunks: WirePart[][] = [
+    [thoughtPart],
     [{ text: "Checking ", thoughtSignature: "c2lnLVQ=" }],
     [{ text: "both." }],
     [callA],
@@ -323,6 +339,69 @@ describe("cinatra#4474 — stream replays the parts of every chunk", () => {
 });
 
 // ---------------------------------------------------------------------------
+// sandbox_execute and an empty id
+// ---------------------------------------------------------------------------
+
+describe("cinatra#4474 — a sandbox_execute response carries its id; an empty id counts as none", () => {
+  const callSandbox: WirePart = {
+    functionCall: { id: "call-s", name: "sandbox_execute", args: { commands: ["ls"] } },
+    thoughtSignature: "c2lnLVM=",
+  };
+  const callEmptyId: WirePart = {
+    functionCall: { id: "", name: "lookup_contact", args: { email: "e@example.test" } },
+  };
+  const expectedResponses: WirePart[] = [
+    {
+      functionResponse: {
+        id: "call-s",
+        name: "sandbox_execute",
+        response: { results: [{ stdout: "sandbox-ok", stderr: "", outcome: { type: "exit", exit_code: 0 } }] },
+      },
+    },
+    { functionResponse: { name: "lookup_contact", response: { email: "e@example.test", found: true } } },
+  ];
+
+  it("generate", async () => {
+    generateReplies = [[callSandbox, callEmptyId], [{ text: "ok" }]];
+    await adapter().generate({ system: "S", prompt: "go", tools: [sandboxTool, lookupTool], maxSteps: 2 });
+    const contents = bodies[1].contents;
+    expect(contents.slice(1)).toEqual([
+      { role: "model", parts: [callSandbox, callEmptyId] },
+      { role: "user", parts: expectedResponses },
+    ]);
+    expect(contents[2].parts[1].functionResponse).not.toHaveProperty("id");
+  });
+
+  it("stream", async () => {
+    streamReplies = [[[callSandbox], [callEmptyId]], [[{ text: "ok" }]]];
+    const toolCalls: LlmToolCall[] = [];
+    await adapter().stream({
+      system: "S",
+      messages: [{ role: "user", content: "go" }],
+      tools: [sandboxTool, lookupTool],
+      maxSteps: 2,
+      onTextDelta: () => {},
+      onToolCall: (c: LlmToolCall) => {
+        toolCalls.push(c);
+      },
+      onToolResult: () => {},
+      onStepStart: () => {},
+      onStepEnd: () => {},
+      onError: (e: Error) => {
+        throw e;
+      },
+    } as StreamInput);
+    const contents = bodies[1].contents;
+    expect(contents.slice(1)).toEqual([
+      { role: "model", parts: [callSandbox, callEmptyId] },
+      { role: "user", parts: expectedResponses },
+    ]);
+    expect(contents[2].parts[1].functionResponse).not.toHaveProperty("id");
+    expect(toolCalls.map((c) => c.id)).toEqual(["call-s", "lookup_contact-0"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // thinkingConfig
 // ---------------------------------------------------------------------------
 
@@ -354,7 +433,7 @@ describe("cinatra#4474 — thinkingLevel MEDIUM for gemini-3.5-flash-lite with t
   const runners = { generate: runGenerate, stream: runStream };
 
   describe.each(Object.keys(runners) as Array<keyof typeof runners>)("%s", (path) => {
-    it.each(["gemini-3.5-flash-lite", "gemini-3.5-flash-lite-001"])(
+    it.each(["gemini-3.5-flash-lite", "gemini-3.5-flash-lite-001", "models/gemini-3.5-flash-lite"])(
       "sets thinkingLevel MEDIUM for %s with a function tool",
       async (model) => {
         const body = await runners[path](model, [lookupTool]);
