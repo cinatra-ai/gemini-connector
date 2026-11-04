@@ -1,5 +1,5 @@
-import { GoogleGenAI, FileState } from "@google/genai";
-import type { FunctionDeclaration, Content, Part } from "@google/genai";
+import { GoogleGenAI, FileState, ThinkingLevel } from "@google/genai";
+import type { FunctionCall, FunctionDeclaration, Content, Part, ThinkingConfig } from "@google/genai";
 // LLM provider adapter relocation (llm-providers S4 — cinatra#1715): the Gemini
 // request-translation adapter now lives IN the gemini-connector. Its request-
 // header builder and telemetry log writer are the connector's OWN
@@ -224,6 +224,79 @@ function geminiToolsConfig(
     : {};
 }
 
+/**
+ * The thinking config for a request, or nothing at all (cinatra#4474).
+ *
+ * `gemini-3.5-flash-lite` defaults to minimal thinking, and Google advises a
+ * thinking level of medium or higher for tool calling. The level is set only
+ * when the request declares at least one function and the model id starts
+ * with `gemini-3.5-flash-lite` (the resource form `models/gemini-3.5-flash-lite`
+ * counts as the same id): Gemini 2.5 models reject `thinkingLevel`, so every
+ * other model, and every request without a declaration, gets no thinking
+ * config.
+ */
+function geminiThinkingConfig(
+  model: string,
+  toolDefs: FunctionDeclaration[] | undefined,
+): { thinkingConfig: ThinkingConfig } | Record<string, never> {
+  const modelId = model.replace(/^models\//, "");
+  return toolDefs && toolDefs.length > 0 && modelId.startsWith("gemini-3.5-flash-lite")
+    ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM } }
+    : {};
+}
+
+/**
+ * The model turn a tool loop sends back to Gemini (cinatra#4474).
+ *
+ * Gemini 3.x attaches an opaque `thoughtSignature` to parts of a model turn
+ * and an `id` to each `functionCall`, and it rejects a tool-result round trip
+ * (HTTP 400) whose replayed model turn lacks them. So the turn is replayed
+ * from the parts the model sent, unchanged and in order. Only when the
+ * response carried no parts is the turn rebuilt from the text and the calls;
+ * the rebuilt calls keep their `id`.
+ */
+function modelTurnParts(
+  receivedParts: Part[] | undefined,
+  text: string | undefined,
+  functionCalls: FunctionCall[],
+): Part[] {
+  if (receivedParts && receivedParts.length > 0) {
+    return [...receivedParts];
+  }
+  const parts: Part[] = [];
+  if (text) {
+    parts.push({ text });
+  }
+  for (const fc of functionCalls) {
+    parts.push({
+      functionCall: {
+        ...(fc.id ? { id: fc.id } : {}),
+        name: fc.name ?? "",
+        args: fc.args ?? {},
+      },
+    });
+  }
+  return parts;
+}
+
+/**
+ * The `functionResponse` part for one call. It echoes the call's `id` when the
+ * model sent one (cinatra#4474); a call without an `id` gets a response
+ * without one. A host-side synthetic id is never sent to Gemini.
+ */
+function functionResponsePart(
+  fc: Pick<FunctionCall, "id" | "name">,
+  response: Record<string, unknown>,
+): Part {
+  return {
+    functionResponse: {
+      ...(fc.id ? { id: fc.id } : {}),
+      name: fc.name ?? "",
+      response,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -312,6 +385,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             maxOutputTokens: input.maxTokens ?? 900,
             responseMimeType: input.outputSchema ? "application/json" : undefined,
             responseJsonSchema: input.outputSchema,
+            ...geminiThinkingConfig(resolvedModel, toolDefs),
           },
           ...geminiToolsConfig(toolDefs),
         };
@@ -328,6 +402,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             responseJsonSchema: input.outputSchema,
             abortSignal: input.signal,
             ...geminiToolsConfig(toolDefs),
+            ...geminiThinkingConfig(resolvedModel, toolDefs),
           },
         });
 
@@ -350,17 +425,16 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
           break;
         }
 
-        // Add model response to contents
-        const modelParts: Part[] = [];
-        if (response.text) {
-          modelParts.push({ text: response.text });
-        }
-        for (const fc of functionCalls) {
-          modelParts.push({
-            functionCall: { name: fc.name ?? "", args: fc.args ?? {} },
-          });
-        }
-        contents.push({ role: "model", parts: modelParts });
+        // Send the model turn back as Gemini sent it (thoughtSignature and
+        // call ids included), rebuilt only when it carried no parts.
+        contents.push({
+          role: "model",
+          parts: modelTurnParts(
+            response.candidates?.[0]?.content?.parts,
+            response.text,
+            functionCalls,
+          ),
+        });
 
         // Execute tools and add results
         const resultParts: Part[] = [];
@@ -387,7 +461,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             } catch {
               parsedResult = { result: sandboxResult };
             }
-            resultParts.push({ functionResponse: { name: fc.name, response: parsedResult } });
+            resultParts.push(functionResponsePart(fc, parsedResult));
             continue;
           }
 
@@ -404,7 +478,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
 
               let parsedResult: Record<string, unknown>;
               try { parsedResult = JSON.parse(truncateResult(resultSummary)); } catch { parsedResult = { result: truncateResult(resultSummary) }; }
-              resultParts.push({ functionResponse: { name: fc.name, response: parsedResult } });
+              resultParts.push(functionResponsePart(fc, parsedResult));
               continue;
             }
           }
@@ -422,12 +496,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             parsedResult = { result: truncateResult(result) };
           }
 
-          resultParts.push({
-            functionResponse: {
-              name: fc.name ?? "",
-              response: parsedResult,
-            },
-          });
+          resultParts.push(functionResponsePart(fc, parsedResult));
         }
         contents.push({ role: "user", parts: resultParts });
       }
@@ -484,11 +553,16 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             maxOutputTokens: input.maxTokens ?? 4096,
             abortSignal: input.signal,
             ...geminiToolsConfig(toolDefs),
+            ...geminiThinkingConfig(resolvedModel, toolDefs),
           },
         });
 
         let fullText = "";
-        const functionCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        const functionCalls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
+        // Every part of every chunk, in arrival order: the model turn is sent
+        // back from these (cinatra#4474), so a signature on any chunk — a
+        // text-only chunk included — survives the round trip.
+        const streamedParts: Part[] = [];
         let lastUsageMetadata: unknown = null;
 
         try {
@@ -499,10 +573,16 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
               input.onTextDelta(text);
             }
 
+            const chunkParts = chunk.candidates?.[0]?.content?.parts;
+            if (chunkParts) {
+              streamedParts.push(...chunkParts);
+            }
+
             // Collect function calls from chunks
             if (chunk.functionCalls) {
               for (const fc of chunk.functionCalls) {
                 functionCalls.push({
+                  ...(fc.id ? { id: fc.id } : {}),
                   name: fc.name ?? "",
                   args: (fc.args ?? {}) as Record<string, unknown>,
                 });
@@ -536,21 +616,20 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
           break;
         }
 
-        // Add model response to contents
-        const modelParts: Part[] = [];
-        if (fullText) {
-          modelParts.push({ text: fullText });
-        }
-        for (const fc of functionCalls) {
-          modelParts.push({ functionCall: { name: fc.name, args: fc.args } });
-        }
-        contents.push({ role: "model", parts: modelParts });
+        // Send the model turn back as Gemini streamed it (thoughtSignature
+        // and call ids included), rebuilt only when no chunk carried parts.
+        contents.push({
+          role: "model",
+          parts: modelTurnParts(streamedParts, fullText, functionCalls),
+        });
 
         // Execute tools and add results
         const resultParts: Part[] = [];
         for (const fc of functionCalls) {
+          // Gemini's own call id when it sent one; the synthetic id is for
+          // the host callbacks only and never reaches Gemini.
           const toolCallEvent: LlmToolCall = {
-            id: `${fc.name}-${step}`,
+            id: fc.id ?? `${fc.name}-${step}`,
             name: fc.name,
             arguments: fc.args,
           };
@@ -580,7 +659,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             } catch {
               parsedResult = { result: sandboxResult };
             }
-            resultParts.push({ functionResponse: { name: fc.name, response: parsedResult } });
+            resultParts.push(functionResponsePart(fc, parsedResult));
             continue;
           }
 
@@ -597,7 +676,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
 
               let parsedResult: Record<string, unknown>;
               try { parsedResult = JSON.parse(truncateResult(resultSummary)); } catch { parsedResult = { result: truncateResult(resultSummary) }; }
-              resultParts.push({ functionResponse: { name: fc.name, response: parsedResult } });
+              resultParts.push(functionResponsePart(fc, parsedResult));
               continue;
             }
           }
@@ -622,9 +701,7 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             parsedResult = { result: truncated };
           }
 
-          resultParts.push({
-            functionResponse: { name: fc.name, response: parsedResult },
-          });
+          resultParts.push(functionResponsePart(fc, parsedResult));
         }
         contents.push({ role: "user", parts: resultParts });
       }
