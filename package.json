@@ -10,6 +10,7 @@
     "cinatra"],
   "main": "src/index.ts",
   "exports": {
+    "./setup-page": "./src/setup-page.tsx",
     ".": "./src/index.ts",
     "./register": "./src/register.ts"
   },
